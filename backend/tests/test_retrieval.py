@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableSequence
 
 from backend.app.retrieval import (
     AskRequest,
@@ -178,9 +180,9 @@ class FakeChatModel:
         self.content = content
         self.messages: list[tuple[str, str]] | None = None
 
-    def invoke(self, messages: list[tuple[str, str]]) -> SimpleNamespace:
+    def invoke(self, messages: list[tuple[str, str]]) -> AIMessage:
         self.messages = messages
-        return SimpleNamespace(content=self.content)
+        return AIMessage(content=self.content)
 
 
 def make_match(
@@ -588,6 +590,36 @@ def test_query_route_selects_retrieval_profile(route, candidate_count) -> None:
     retriever.ask("tCMzkJxBM5c", "What happened?", top_k=5)
 
     assert index.query_arguments[0]["top_k"] == candidate_count
+
+
+def test_rag_pipeline_is_composed_as_an_lcel_sequence() -> None:
+    retriever = PineconeTranscriptRetriever(
+        index=FakePineconeIndex(
+            [
+                make_match(
+                    "chunk-1",
+                    "Transcript excerpt",
+                    0,
+                    1,
+                    [1.0, 0.0],
+                    0.9,
+                )
+            ]
+        ),
+        embedder=FakeEmbedder([1.0, 0.0]),
+        chat_model=FakeChatModel("Transcript answer [1]."),
+        query_planner=FakeQueryPlanner(
+            QueryPlan(route="fact_lookup", rewritten_query="transcript")
+        ),
+        reranker=FakeReranker(),
+        compressor=FakeCompressor(),
+        embedding_dimension=2,
+    )
+
+    assert isinstance(retriever.chain, RunnableSequence)
+    assert retriever.ask("tCMzkJxBM5c", "What is said?").answer == (
+        "Transcript answer [1]."
+    )
 
 
 def test_multi_query_retrieval_merges_duplicate_chunks() -> None:
